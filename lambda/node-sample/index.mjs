@@ -1,27 +1,49 @@
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb'
-import pkg from 'aws-xray-sdk'
+import xray from 'aws-xray-sdk'
+import https from 'https'
 
-const { captureAWSv3Client } = pkg;
+const { captureAWSv3Client, captureHTTPs } = xray
 
-console.log(`func<${captureAWSv3Client}>`)
+const httpClient = captureHTTPs(https)
 
-const client = captureAWSv3Client(new DynamoDBClient({
+const ddbClient = captureAWSv3Client(new DynamoDBClient({
   region: 'ap-northeast-1'
 }))
 
 export async function handler(event) {
   const params = JSON.stringify(event.multiValueQueryStringParameters)
-  const msg = await getItem()
+  const msg = await ddbAccess()
+  const res = await httpAccess()
   return {
     statusCode: 200,
-    body: `node-sample ${params}, ${msg}`
+    body: `node-sample ${params}, ${msg}, ${res}`
   }
 }
 
-async function getItem() {
-  const res = await client.send(new GetItemCommand({
+async function ddbAccess() {
+  const res = await ddbClient.send(new GetItemCommand({
     TableName: 'RustLambdaSampleTable',
     Key: { Id: { S: 'node-sample' } }
   }))
   return JSON.stringify(res.Item)
+}
+
+const URL = 'https://httpbin.org/get?name=node-sample'
+
+function httpAccess() {
+  return new Promise(function (resolve, reject) {
+    const req = httpClient.request(URL, (res) => {
+      if (res.statusCode !== 200) {
+        return reject(new Error('statusCode=' + res.statusCode))
+      }
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        const ret = JSON.parse(data).args.name
+        resolve(ret)
+      })
+    })
+    req.on('error', reject)
+    req.end()
+  })
 }
